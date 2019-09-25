@@ -466,3 +466,39 @@ func BenchmarkWaitNNoDelay(b *testing.B) {
 		lim.WaitN(ctx, 1)
 	}
 }
+
+func TestUpdateMinElapsed(t *testing.T) {
+	tests := []struct{
+		name string
+		limiter *Limiter
+		minElapsed time.Duration
+		elapsed time.Duration
+		expectedTokens float64
+	}{
+		{
+			name: "elapsed greater than minimum",
+			limiter: NewLimiter(100, 100),
+			minElapsed: time.Duration(1) * d,
+			elapsed: time.Duration(2) * d,
+			expectedTokens: 20,
+		},
+		{
+			name: "elapsed less than than minimum",
+			limiter: NewLimiter(100, 100),
+			minElapsed: time.Duration(2) * d,
+			elapsed: time.Duration(1) * d,
+			expectedTokens: 0,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tc.limiter.SetMinElapsed(tc.minElapsed)
+			tc.limiter.last = t0
+			tc.limiter.tokens = 0
+			_, _, tokens := tc.limiter.advance(t0.Add(tc.elapsed))
+			if  tokens != tc.expectedTokens {
+				t.Errorf("Expected %v tokens, got %v", tc.expectedTokens, tokens)
+			}
+		})
+	}
+}

@@ -55,6 +55,8 @@ func Every(interval time.Duration) Limit {
 type Limiter struct {
 	limit Limit
 	burst int
+	// minElapsed is the minimum elapsed time before adding new tokens
+	minElapsed time.Duration
 
 	mu     sync.Mutex
 	tokens float64
@@ -79,12 +81,21 @@ func (lim *Limiter) Burst() int {
 	return lim.burst
 }
 
+// MinElapsed returns the minimum amount of time that needs to have passed
+// before tokens will be added to the bucket
+// A zero MinElapsed will always allow tokens to be added to the bucket
+// regardless of time elapsed since last update
+func (lim *Limiter) MinElapsed() time.Duration {
+	return lim.minElapsed
+}
+
 // NewLimiter returns a new Limiter that allows events up to rate r and permits
 // bursts of at most b tokens.
 func NewLimiter(r Limit, b int) *Limiter {
 	return &Limiter{
 		limit: r,
 		burst: b,
+		minElapsed: 0,
 	}
 }
 
@@ -298,6 +309,23 @@ func (lim *Limiter) SetBurstAt(now time.Time, newBurst int) {
 	lim.burst = newBurst
 }
 
+// SetMinElapsed is shorthand for SetMinElapsedAt(time.Now(), newMinElapsed).
+func (lim *Limiter) SetMinElapsed(newMinElapsed time.Duration) {
+	lim.SetMinElapsedAt(time.Now(), newMinElapsed)
+}
+
+// SetMinElapsedAt sets a new burst size for the limiter.
+func (lim *Limiter) SetMinElapsedAt(now time.Time, newMinElapsed time.Duration) {
+	lim.mu.Lock()
+	defer lim.mu.Unlock()
+
+	now, _, tokens := lim.advance(now)
+
+	lim.last = now
+	lim.tokens = tokens
+	lim.minElapsed = newMinElapsed
+}
+
 // reserveN is a helper method for AllowN, ReserveN, and WaitN.
 // maxFutureReserve specifies the maximum reservation wait duration allowed.
 // reserveN returns Reservation, not *Reservation, to avoid allocation in AllowN and WaitN.
@@ -360,9 +388,13 @@ func (lim *Limiter) advance(now time.Time) (newNow time.Time, newLast time.Time,
 		last = now
 	}
 
+	elapsed := now.Sub(last)
+	if elapsed < lim.minElapsed {
+		return lim.last, lim.last, lim.tokens
+	}
+
 	// Avoid making delta overflow below when last is very old.
 	maxElapsed := lim.limit.durationFromTokens(float64(lim.burst) - lim.tokens)
-	elapsed := now.Sub(last)
 	if elapsed > maxElapsed {
 		elapsed = maxElapsed
 	}
